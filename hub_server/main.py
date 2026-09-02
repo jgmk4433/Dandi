@@ -12,18 +12,72 @@ main.py
     UI 를 닫아도 워커/서버가 정상 종료되지 않았다.
     -> uvicorn.Server 객체를 직접 제어해 UI 종료 시 서버도 안전하게 내린다.
   - 서버 로그를 error 레벨로 감춰 문제 파악이 어려웠다 -> info 레벨로 노출.
+  - 가중치 파일(final.pt)이 없으면 실행 시 GitHub Releases에서 자동 다운로드하도록 로직 추가.
 """
 
 import argparse
 import logging
+import os
 import sys
 import threading
 import time
+import urllib.request
 
 import uvicorn
 
 from app.config import settings
 from app.database import init_db
+
+logger = logging.getLogger("main")
+
+# ==========================================
+# 📌 모델 자동 다운로드 설정
+# ==========================================
+MODEL_URL = "https://github.com/jgmk4433/Dandi/releases/download/Dandi/final.pt"
+
+# 프로젝트 내부에서 모델을 참조하는 경로 (필요에 따라 "final.pt" 등으로 수정 가능)
+MODEL_PATH = "weights/final.pt"
+
+
+def _download_progress(count: int, block_size: int, total_size: int) -> None:
+    """콘솔에 다운로드 진행률(%)을 표시하는 콜백 함수"""
+    if total_size > 0:
+        percent = int(count * block_size * 100 / total_size)
+        percent = min(100, percent)
+        downloaded_mb = (count * block_size) / (1024 * 1024)
+        total_mb = total_size / (1024 * 1024)
+        sys.stdout.write(f"\r[다운로드 중] {percent}% ({downloaded_mb:.1f}MB / {total_mb:.1f}MB)")
+        sys.stdout.flush()
+
+
+def ensure_model_weights(model_path: str = MODEL_PATH, model_url: str = MODEL_URL) -> None:
+    """모델 파일 존재 여부를 검사하고, 없으면 자동 다운로드한다."""
+    if os.path.exists(model_path):
+        return
+
+    logger.info(f"모델 파일이 존재하지 않습니다: {model_path}")
+    logger.info("원격 저장소(GitHub Releases)에서 가중치 파일을 다운로드합니다...")
+
+    # 대상 디렉터리가 없으면 자동 생성
+    dir_name = os.path.dirname(os.path.abspath(model_path))
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+
+    try:
+        # urllib 기본 요청 헤더 설정 (GitHub 리디렉션 대응)
+        opener = urllib.request.build_opener()
+        opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+        urllib.request.install_opener(opener)
+
+        urllib.request.urlretrieve(model_url, model_path, reporthook=_download_progress)
+        print()  # 진행률 표시 후 줄바꿈
+        logger.info(f"모델 가중치 다운로드 완료: {model_path}")
+    except Exception as e:
+        logger.error(f"모델 가중치 다운로드 실패: {e}")
+        # 다운로드 중단 시 손상된 빈 파일이 남지 않도록 제거
+        if os.path.exists(model_path):
+            os.remove(model_path)
+        sys.exit(1)
 
 
 def _setup_logging() -> None:
@@ -89,6 +143,11 @@ def main() -> int:
     args = parser.parse_args()
 
     _setup_logging()
+
+    # DB 조회 전용 UI 모드가 아니라면 서버 시작 전 모델 가중치 파일 확인 및 자동 다운로드
+    if not args.ui_only:
+        ensure_model_weights()
+
     init_db()  # 테이블 준비 (서버 lifespan 에서도 안전하게 재호출됨)
 
     if args.ui_only:
