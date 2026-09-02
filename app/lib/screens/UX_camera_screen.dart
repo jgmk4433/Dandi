@@ -12,12 +12,23 @@ import '../utils/image_utils.dart';
 
 const bool kEnableTfliteDetection = true; // TFLite 사전 검수 활성화 여부
 
-// 검출 입력에만 중앙 크롭을 적용하고 증거 이미지는 전체 프레임으로 유지한다.
-const bool kCropToGuideBox = false;
+// 화면 가이드 박스의 크기 비율이다. UI와 이미지 처리가 이 값을 함께 사용한다.
+const double kGuideBoxWidthFactor = 0.55;
+const double kGuideBoxHeightFactor = 0.62;
 
-// 피사체 누락을 방지하는 검출용 중앙 크롭 비율이다.
-const double kCropWidthFactor = 0.75;
-const double kCropHeightFactor = 0.80;
+// 가이드 박스 바깥으로 함께 남길 주변부 여백 배율이다.
+// 1.0이면 가이드 박스와 정확히 일치하고, 값이 클수록 선명한 영역이 넓어진다.
+const double kGuideMarginFactor = 1.35;
+
+// 전송 이미지에서 유지 영역 바깥을 블러 처리할지 여부다.
+const bool kBlurOutsideGuide = true;
+
+// 블러 강도다. null이면 이미지 크기에 비례해 자동 계산한다.
+const int? kGuideBlurRadius = null;
+
+// 검출 입력을 유지 영역으로 한정할지 여부다.
+// 유지 영역 밖의 피사체는 어차피 블러 처리되므로 기본값을 true로 둔다.
+const bool kDetectInsideGuideOnly = true;
 
 // 오프라인 증거 이미지의 저장 여부와 압축 기준을 정의한다.
 const bool kSaveOfflineImage = false;
@@ -118,17 +129,19 @@ class _CameraScreenState extends State<CameraScreen> {
             return;
           }
 
-          // 검출용 복사본만 중앙 크롭해 증거 원본을 보존한다.
+          // 검출용 복사본만 유지 영역으로 크롭해 증거 원본을 보존한다.
           img.Image detectionInput = decodedImage;
-          if (kCropToGuideBox) {
-            final int cw = (decodedImage.width * kCropWidthFactor).round();
-            final int ch = (decodedImage.height * kCropHeightFactor).round();
-            final int cx = ((decodedImage.width - cw) / 2).round();
-            final int cy = ((decodedImage.height - ch) / 2).round();
+          if (kDetectInsideGuideOnly) {
+            final keep = ImageUtils.calcKeepRect(
+              decodedImage,
+              widthFactor: kGuideBoxWidthFactor,
+              heightFactor: kGuideBoxHeightFactor,
+              marginFactor: kGuideMarginFactor,
+            );
             detectionInput = img.copyCrop(decodedImage,
-                x: cx, y: cy, width: cw, height: ch);
+                x: keep.x, y: keep.y, width: keep.width, height: keep.height);
             debugPrint('[촬영] 검출용 크롭: '
-                '${decodedImage.width}x${decodedImage.height} -> ${cw}x$ch');
+                '${decodedImage.width}x${decodedImage.height} -> $keep');
           }
 
           final result = await _detectionService.detect(detectionInput);
@@ -146,7 +159,27 @@ class _CameraScreenState extends State<CameraScreen> {
             ? '[촬영] 위치 정보 없음 (권한/GPS/타임아웃 - 위 [위치] 로그 참고)'
             : '[촬영] 위치 확보: ${_capturedLocation!.address}');
 
-        // 촬영 시각을 이미지 픽셀에 합성한다.
+        // 유지 영역 바깥을 블러 처리해 주변 개인정보를 가린다.
+        if (kBlurOutsideGuide) {
+          setState(() => _processingLabel = '주변부 블러 처리 중...');
+          // 진행 표시가 갱신되도록 한 프레임을 양보한다.
+          await Future<void>.delayed(const Duration(milliseconds: 16));
+
+          final keep = ImageUtils.calcKeepRect(
+            decodedImage,
+            widthFactor: kGuideBoxWidthFactor,
+            heightFactor: kGuideBoxHeightFactor,
+            marginFactor: kGuideMarginFactor,
+          );
+          decodedImage = ImageUtils.blurOutsideRect(
+            decodedImage,
+            keep,
+            blurRadius: kGuideBlurRadius,
+          );
+          debugPrint('[촬영] 주변부 블러 적용: 유지 영역 $keep');
+        }
+
+        // 촬영 시각을 블러 처리 후에 합성해 문자 가독성을 유지한다.
         decodedImage = await ImageUtils.burnTimestamp(decodedImage, _captureTimestamp!);
         
         // 검수용 이미지를 임시 JPG 파일로 저장한다.
@@ -324,12 +357,30 @@ class _CameraScreenState extends State<CameraScreen> {
       children: [
         Positioned.fill(child: CameraPreview(_controller!)),
 
+        // 블러 처리되지 않고 남는 선명 영역의 경계를 흐린 선으로 표시한다.
+        if (kBlurOutsideGuide)
+          Align(
+            alignment: Alignment.center,
+            child: FractionallySizedBox(
+              widthFactor:
+                  (kGuideBoxWidthFactor * kGuideMarginFactor).clamp(0.0, 1.0),
+              heightFactor:
+                  (kGuideBoxHeightFactor * kGuideMarginFactor).clamp(0.0, 1.0),
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.white54, width: 1.5),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+              ),
+            ),
+          ),
+
         // 사람과 킥보드를 함께 배치할 중앙 촬영 가이드를 표시한다.
         Align(
           alignment: Alignment.center,
           child: FractionallySizedBox(
-            widthFactor: 0.55,
-            heightFactor: 0.62,
+            widthFactor: kGuideBoxWidthFactor,
+            heightFactor: kGuideBoxHeightFactor,
             child: Container(
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.white, width: 2.5),
@@ -348,9 +399,11 @@ class _CameraScreenState extends State<CameraScreen> {
                 color: Colors.black54,
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: const Text(
-                '킥보드/라이더 인식 중 (가이드에 맞춰주세요)',
-                style: TextStyle(color: Colors.white, fontSize: 13),
+              child: Text(
+                kBlurOutsideGuide
+                    ? '가이드 안에 킥보드/라이더를 맞춰주세요 (바깥 영역은 블러 처리)'
+                    : '킥보드/라이더 인식 중 (가이드에 맞춰주세요)',
+                style: const TextStyle(color: Colors.white, fontSize: 13),
               ),
             ),
           ),
@@ -439,6 +492,22 @@ class _CameraScreenState extends State<CameraScreen> {
             ],
           ),
         ),
+        if (kBlurOutsideGuide)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(
+              children: const [
+                Icon(Icons.blur_on, size: 16, color: Colors.black54),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '가이드 주변부는 블러 처리된 상태로 전송됩니다.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                ),
+              ],
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.all(16.0),
           child: Row(
