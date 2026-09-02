@@ -1,0 +1,30 @@
+{
+  "_note": [
+    "학습된 YOLO 모델의 클래스 이름을 허브의 표준 역할(role)로 매핑하는 파일입니다.",
+    "클래스 이름이 바뀌어도 이 파일만 수정하면 서버 코드는 그대로 사용합니다.",
+    "사용 가능한 role: PERSON, ESCOOTER, CYCLE, HELMET, BARE_HEAD",
+    "CYCLE(자전거/오토바이)은 킥보드와 혼동되는 물체를 단속 대상에서 배제하는 용도입니다.",
+    "사람이 escooter 보다 cycle 과 더 많이 겹치면 탑승자에서 제외됩니다.",
+    "BARE_HEAD 에는 맨머리뿐 아니라 모자(캡/비니 등)도 포함해 학습합니다. HELMET 은 안전모만입니다.",
+    "BARE_HEAD 는 YOLO 판정을 신뢰해 VLM 없이 위반 확정됩니다.",
+    "HELMET 검출 건은 가려짐으로 인한 오검출을 걸러내기 위해 예외 없이 VLM 최종 확인을 받습니다.",
+    "공백/하이픈은 자동으로 밑줄로 정규화되므로 'bare head' 로 적어도 인식됩니다."
+  ],
+  "expected_classes": {
+    "0": "person",
+    "1": "escooter",
+    "2": "cycle",
+    "3": "helmet",
+    "4": "bare head"
+  },
+  "roles": {
+    "person": "PERSON",
+    "escooter": "ESCOOTER",
+    "cycle": "CYCLE",
+    "bicycle": "CYCLE",
+    "motorcycle": "CYCLE",
+    "helmet": "HELMET",
+    "bare head": "BARE_HEAD",
+    "bare_head": "BARE_HEAD"
+  }
+}

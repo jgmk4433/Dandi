@@ -1,0 +1,11 @@
+path: E:/프로젝트 파일/준섭이가 한 라벨링 된 데이터/prepared_3305
+train: train/images
+val: val/images
+
+nc: 5
+names:
+  0: person
+  1: escooter
+  2: cycle
+  3: helmet
+  4: bare head
