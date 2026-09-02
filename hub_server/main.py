@@ -33,7 +33,7 @@ logger = logging.getLogger("main")
 # ==========================================
 # 📌 모델 자동 다운로드 설정
 # ==========================================
-MODEL_URL = "https://github.com/jgmk4433/Dandi/releases/download/Dandi/final.pt"
+MODEL_URL = "https://github.com/jgmk4433/Dandi/releases/download/DandiYolo/final.pt"
 
 # 프로젝트 내부에서 모델을 참조하는 경로 (필요에 따라 "final.pt" 등으로 수정 가능)
 MODEL_PATH = "weights/final.pt"
