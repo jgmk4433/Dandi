@@ -60,8 +60,10 @@ class ObjectDetectionService {
   static const String _labelsPath = 'assets/models/labels.txt';
 
   // COCO 테스트 라벨과 운영 라벨의 사용 모드를 전환한다.
-  static const bool kCocoTestMode = true;
+  // 운영(커스텀 2클래스 모델) 기준이므로 false를 유지한다.
+  static const bool kCocoTestMode = false;
 
+  // 운영 모델의 클래스 인덱스: 0=person, 1=escooter
   static const List<String> _requiredLabelsReal = ['person', 'escooter'];
   static const List<String> _requiredLabelsCocoTest = ['person', 'bicycle'];
 
@@ -74,7 +76,24 @@ class ObjectDetectionService {
   // 사람과 이동수단의 탑승 여부를 판단할 IoU 기준이다.
   static const double _ridingIoUThreshold = 0.1;
 
+  // end-to-end 출력의 바운딩 박스 좌표 해석 방식을 지정한다.
+  // 'auto'는 값의 대소 관계로 추정하므로 가장자리 객체에서 오판할 수 있다.
+  // 모델 출력 형식이 확정되면 'xyxy' 또는 'cxcywh'로 고정한다.
+  static const String kBoxFormat = 'auto';
+
   bool get isModelLoaded => _interpreter != null;
+
+  // 라벨 파일이 현재 모드의 필수 라벨을 모두 포함하는지 확인한다.
+  List<String> get _labelsMissingFromFile => _requiredLabels
+      .where((l) => !_labels.map((e) => e.toLowerCase()).contains(l))
+      .toList();
+
+  // 테스트 모드에서만 오토바이를 이륜차 라벨로 통합해 정규화한다.
+  String _normalizeLabel(String raw) {
+    final label = raw.toLowerCase();
+    if (kCocoTestMode && label == 'motorcycle') return 'bicycle';
+    return label;
+  }
 
   // TFLite 모델과 라벨을 로드하고 입출력 정보를 확인한다.
   Future<void> loadModel() async {
@@ -91,6 +110,25 @@ class ObjectDetectionService {
       debugPrint('라벨: $_labels (${_labels.length}개)');
       debugPrint('판정 대상: $_requiredLabels'
           '${kCocoTestMode ? "  ⚠️ COCO 테스트 모드 (운영 전 kCocoTestMode=false 로 변경)" : ""}');
+
+      // 라벨 파일과 판정 대상이 어긋나면 모든 사진이 조용히 미전송된다.
+      if (_labels.isEmpty) {
+        debugPrint('❌ 치명적: $_labelsPath 를 읽지 못했습니다. '
+            'pubspec.yaml 의 assets 등록을 확인하세요.');
+      } else {
+        final missing = _labelsMissingFromFile;
+        if (missing.isNotEmpty) {
+          debugPrint('❌ 치명적: 라벨 파일에 필수 라벨이 없습니다 -> ${missing.join(', ')}');
+          debugPrint('   현재 라벨 파일: $_labels');
+          debugPrint('   $_labelsPath 를 아래 2줄(클래스 인덱스 순서)로 교체하세요:');
+          debugPrint('     person');
+          debugPrint('     escooter');
+          debugPrint('   이 상태로는 판정이 항상 실패해 서버 전송이 발생하지 않습니다.');
+        } else if (!kCocoTestMode && _labels.length != _requiredLabelsReal.length) {
+          debugPrint('⚠️ 경고: 운영 모드인데 라벨이 ${_labels.length}개입니다. '
+              'COCO 라벨 파일이 남아있는지 확인하세요.');
+        }
+      }
       debugPrint('======================');
     } catch (e) {
       debugPrint('tflite 모델 로드 실패: $e');
@@ -123,6 +161,13 @@ class ObjectDetectionService {
   Future<DetectionResult> detect(img.Image image) async {
     if (_interpreter == null) {
       throw StateError('모델이 로드되지 않았습니다.');
+    }
+
+    // 라벨이 어긋난 상태의 추론은 결과가 무의미하므로 원인을 명시해 중단한다.
+    final labelIssue = _labelsMissingFromFile;
+    if (labelIssue.isNotEmpty) {
+      throw StateError('라벨 설정 오류: $_labelsPath 에 ${labelIssue.join(', ')} '
+          '라벨이 없습니다. (현재 라벨: $_labels)');
     }
 
     final inputTensor = _interpreter!.getInputTensor(0);
@@ -293,9 +338,14 @@ class ObjectDetectionService {
           coordLogged++;
         }
 
-        // 좌표 유효성에 따라 xyxy 또는 cxcywh 형식으로 해석한다.
+        // 설정된 좌표 형식에 따라 xyxy 또는 cxcywh로 해석한다.
         double x1, y1, x2, y2;
-        if (c > a && d > b) {
+        final bool treatAsXyxy = kBoxFormat == 'xyxy'
+            ? true
+            : kBoxFormat == 'cxcywh'
+                ? false
+                : (c > a && d > b);
+        if (treatAsXyxy) {
           // xyxy 좌표를 그대로 사용한다.
           x1 = a;
           y1 = b;
@@ -309,11 +359,7 @@ class ObjectDetectionService {
           y2 = b + d / 2;
         }
 
-        // COCO 테스트 모드에서는 motorcycle을 bicycle 라벨로 통합한다.
-        var label = _labels[classId].toLowerCase();
-        if (kCocoTestMode && label == 'motorcycle') {
-          label = 'bicycle';
-        }
+        final label = _normalizeLabel(_labels[classId]);
 
         boxesByLabel
             .putIfAbsent(label, () => [])
@@ -353,7 +399,7 @@ class ObjectDetectionService {
             if (confidence > highestConfidence) highestConfidence = confidence;
             if (c >= _labels.length) continue;
 
-            final label = _labels[c].toLowerCase();
+            final label = _normalizeLabel(_labels[c]);
             boxesByLabel.putIfAbsent(label, () => []).add(
                   _Box(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, confidence),
                 );
