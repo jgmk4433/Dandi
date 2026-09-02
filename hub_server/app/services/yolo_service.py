@@ -3,7 +3,7 @@ services/yolo_service.py
 ------------------------
 허브 측 YOLO 재검증 담당 (모델 래퍼).
 
-[현재 상태] 모델 학습이 진행 중이므로 가중치 파일이 아직 없다.
+[현재 상태] 
            settings.VERIFY_MODE="auto" 에서는 가중치가 없으면 검증을 건너뛰고
            앱의 1차 판정을 그대로 통과시킨다(yolo_result=UNVERIFIED).
            학습이 끝나면 **models/final.pt 에 파일을 넣고 서버만 재시작**하면
